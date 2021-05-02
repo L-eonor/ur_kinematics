@@ -390,6 +390,8 @@ class kinematics_model():
         #picks up the most similar combination
         chosen_combination=valid_joints[np.argmin(total_difference_per_combination), :]
     
+        return chosen_combination
+
     def normaliza_pi(self, x):
         normalized=copy.deepcopy(x)
         x=x.flatten()
