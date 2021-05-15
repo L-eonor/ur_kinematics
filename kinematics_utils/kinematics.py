@@ -2,7 +2,10 @@ import sys, math, copy
 import numpy as np
 
 class kinematics_model():
-    def __init__(self, ur_model='ur5', gripper_offset=0.15):
+    """
+    Deals with the ur kinematics
+    """
+    def __init__(self, ur_model='ur5', gripper_offset=0.13):
 
         #DH params
         #https://www.universal-robots.com/articles/ur/application-installation/dh-parameters-for-calculations-of-kinematics-and-dynamics/
@@ -18,15 +21,16 @@ class kinematics_model():
             self.a=np.array([0 ,-0.425 ,-0.39225 ,0 ,0 ,0], dtype=np.float32)
 
             #given by the urdf, ofsets configured
-            #0], dtype=np.float32)#
-            #-np.pi/2
             self.theta_offsets=np.array([np.pi, 0, 0, 0, 0, 0], dtype=np.float32)
             self.alpha_offsets=np.array([0, 0, 0, 0, 0, 0], dtype=np.float32)
             self.alpha=self.alpha-self.alpha_offsets
 
             #the robots origin: where is it placed? It is 0.1m above the ground from the urdf files
             self.origin=np.array([0, 0, 0.1], dtype=np.float32)
-            #self.wrist_offset=np.array([np.pi/2, np.pi/2, -np.pi])
+            
+            #arm diameter, to find if the joint 2 (index1) is above the ground
+            #https://www.igus.eu/info/robotics-ur-rings
+            self.arm_A_radius=0.086/2
 
         elif (ur_model=='ur10'):
             self.d=np.array([0.1273, 0, 0, 0.163941, 0.1157, 0.0922 + gripper_offset], dtype=np.float32)
@@ -38,7 +42,10 @@ class kinematics_model():
             self.alpha=-self.alpha-self.alpha_offsets
 
             self.origin=np.array([0, 0, 0], dtype=np.float32)
-            #self.wrist_offset=np.array([0, 0, 0])
+            
+            #arm diameter, to find if the joint 2 (index1)  is above the ground
+            #https://www.igus.eu/info/robotics-ur-rings
+            self.arm_A_radius=0.108/2
 
         else:
             print("error: Invalid ur model")
@@ -147,8 +154,6 @@ class kinematics_model():
 
         joints_without_offset=joint_variables-self.theta_offsets
         T_matrix=self.get_transformation_matrix(joint_variables=joints_without_offset, start_joint=0, end_joint=self.number_of_joints-1)
-        #print("pose_before")
-        #print(T_matrix[0:3, -1])
         pose=np.array(T_matrix[0:3, -1]) + self.origin
         ee_orientation=np.array(T_matrix[0:3, 0:3]) 
 
@@ -265,8 +270,8 @@ class kinematics_model():
                 impossible_combinations.insert(0, hypothesis_index+1)
             else:
                 theta3 = np.arccos ((np.linalg.norm(P_13)**2 - self.a[1]**2 - self.a[2]**2 )/(2 * self.a[1] * self.a[2]))
-            self.joints_ik[hypothesis_index  , 2] =  theta3
-            self.joints_ik[hypothesis_index+1, 2] = -theta3
+            self.joints_ik[hypothesis_index  , 2] = -theta3
+            self.joints_ik[hypothesis_index+1, 2] =  theta3
 
         #deletes impossible hypotesis
         possible_joints=copy.deepcopy(self.joints_ik)
@@ -342,12 +347,10 @@ class kinematics_model():
         Returns
             chosen_combination(1*6)-> possible and valid combination of joints. Returns None if it is impossible
         """
-        #orientation=np.array([[1, 0, 0], [0, 1, 0], [0, 0, -1]])
-        #orientation=np.array([[0, 0, 1], [1, 0, 0], [0, 1, 0]])
+        ##make sure the orientation is valid by computing the cross produxt of x by y and comparing against z
+        #assert (np.cross(orientation[:, 0], orientation[:, 1])==orientation[:, 2]).all()
 
         possible_joints=self.inverse_kin(pose=pose, orientation=orientation)
-        #print("possible_joints")
-        #print(possible_joints)
 
         #there are any possible combinations?
         if len(possible_joints)==0:
@@ -369,8 +372,8 @@ class kinematics_model():
                 frame_center_with_correction=frame_center + self.origin
                 frame_center_z_coord=frame_center_with_correction[-1]
 
-                #if joint is below ground, delete possibility
-                if(frame_center_z_coord<0):
+                #if joint is below ground or joint 2 (index1) is colliding with the ground, delete possibility
+                if(frame_center_z_coord<0 and joint_index!=1) or (frame_center_z_coord<(4*self.arm_A_radius/3) and joint_index==1):
                     break
                 #all all joints from the combination are valid, append to valid joints
                 if(joint_index==len(joints_without_offset)-1):
@@ -378,7 +381,7 @@ class kinematics_model():
                         valid_joints=np.reshape(joint_combination, (1, len(joint_combination)))
                     else:
                         valid_joints=np.vstack((valid_joints, joint_combination))
-                        
+            
         #there are any valid combinations?
         if len(valid_joints)==0:
             return None
@@ -389,9 +392,10 @@ class kinematics_model():
         total_difference_per_combination=np.sum(joint_difference, axis=1)
         #picks up the most similar combination
         chosen_combination=valid_joints[np.argmin(total_difference_per_combination), :]
-    
-        return chosen_combination
 
+        chosen_combination[-1]=self.normaliza_0_pi(chosen_combination[-1])
+        return self.normaliza_pi(chosen_combination)
+    
     def normaliza_pi(self, x):
         normalized=copy.deepcopy(x)
         x=x.flatten()
@@ -403,3 +407,11 @@ class kinematics_model():
                 while x[i]<-np.pi:
                     x[i]+=np.pi
         return np.reshape(x, normalized.shape )
+
+    def normaliza_0_pi(self, x):
+        while x>np.pi:
+            x-=np.pi
+    
+        while x<0:
+            x+=np.pi
+        return x
